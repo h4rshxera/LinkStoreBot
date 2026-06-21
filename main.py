@@ -79,7 +79,7 @@ def trigger_broadcast_sending(message, text_payload=None, target_msg=None):
     threading.Thread(target=async_broadcast_engine, args=(users, msg_to_copy, text_payload)).start()
     bot.reply_to(message, "Message Sent To Everywhere bot exists ✅")
 
-# --- BROADCAST CONTROLLER (WORKS IN GC & DM) ---
+# --- BROADCAST CONTROLLER ---
 @bot.message_handler(commands=['broadcast'])
 def broadcast_cmd(message):
     register_user(message.from_user.id)
@@ -87,21 +87,16 @@ def broadcast_cmd(message):
         bot.reply_to(message, "Only @HarshInfo Can use this command")
         return
     
-    # Pathway 1: /broadcast by replying to an existing media/text message in GC or DM
     if message.reply_to_message:
         trigger_broadcast_sending(message, target_msg=message.reply_to_message)
         return
 
-    # Strips out command mentions like /broadcast@harshxerabot in groups
     command_text = message.text.split(maxsplit=1)
-    
-    # Pathway 2: /broadcast completely blank
     if len(command_text) < 2:
         bot.reply_to(message, "Type a message to send Everywhere bot exists")
         bot.register_next_step_handler(message, process_manual_next_step_broadcast)
         return
     
-    # Pathway 3: Inline /broadcast <message>
     inline_text = command_text[1]
     trigger_broadcast_sending(message, text_payload=inline_text)
 
@@ -111,7 +106,7 @@ def process_manual_next_step_broadcast(message):
         return
     trigger_broadcast_sending(message)
 
-# --- START COMMAND (WORKS IN GC & DM) ---
+# --- START COMMAND ---
 @bot.message_handler(commands=['start'])
 def start_cmd(message):
     register_user(message.from_user.id)
@@ -138,17 +133,54 @@ def start_cmd(message):
 
     bot.reply_to(message, "Bot running made by @HarshInfo")
 
-# --- GENLINK STEP TRIGGER ---
+# --- GLOBAL SINGLE MESSAGE SAVE UTILITY ---
+def save_single_message_to_db(message_obj, custom_text=None):
+    """ Helper to instantly commit a file or custom text record to SQLite """
+    unique_key = generate_unique_key(8)
+    conn = sqlite3.connect('file_store.db')
+    cursor = conn.cursor()
+    
+    if custom_text:
+        # If it's inline text, we create a temporary message payload to reference
+        temp_msg = bot.send_message(chat_id=message_obj.chat.id, text=custom_text)
+        cursor.execute("INSERT INTO stored_messages (unique_key, chat_id, message_id) VALUES (?, ?, ?)", 
+                       (unique_key, temp_msg.chat.id, temp_msg.message_id))
+    else:
+        cursor.execute("INSERT INTO stored_messages (unique_key, chat_id, message_id) VALUES (?, ?, ?)", 
+                       (unique_key, message_obj.chat.id, message_obj.message_id))
+        
+    conn.commit()
+    conn.close()
+    
+    bot_username = bot.get_me().username
+    share_link = f"https://t.me/{bot_username}?start={unique_key}"
+    bot.reply_to(message_obj, f"✅ **Stored successfully!**\n\n🔗 Your Shareable Link:\n`{share_link}`", parse_mode="Markdown")
+
+# --- GENLINK CONTROLLER (NEW 3-WAY METHODS) ---
 @bot.message_handler(commands=['genlink'])
 def genlink_cmd(message):
     register_user(message.from_user.id)
-    USER_STATES[message.from_user.id] = "waiting_for_media"  
-    bot.reply_to(message, "🔄 **Send Media text or anything**", parse_mode="Markdown")
+    
+    # Method 1: /genlink used as a Reply to any media or message text
+    if message.reply_to_message:
+        save_single_message_to_db(message.reply_to_message)
+        return
+
+    command_text = message.text.split(maxsplit=1)
+    
+    # Method 2: /genlink completely empty -> Fall back to classic step-listener prompt
+    if len(command_text) < 2:
+        USER_STATES[message.from_user.id] = "waiting_for_media"  
+        bot.reply_to(message, "🔄 **Send Media text or anything**", parse_mode="Markdown")
+        return
+    
+    # Method 3: Inline text directly inside the command line (/genlink My text here)
+    inline_text_payload = command_text[1]
+    save_single_message_to_db(message, custom_text=inline_text_payload)
 
 # --- ALBUM DELAY HANDLING ---
 def process_delayed_album_save(chat_id, user_id, group_id, reply_to_msg_id):
     time.sleep(1.0)  
-    
     messages_to_save = ALBUM_COLLECTOR.pop(group_id, [])
     if not messages_to_save:
         return
@@ -175,13 +207,12 @@ def process_delayed_album_save(chat_id, user_id, group_id, reply_to_msg_id):
     )
     USER_STATES.pop(user_id, None)
 
-# --- MASTER CATCH FILTER (SAFE FOR GROUP CHATS) ---
+# --- MASTER CATCH FILTER ---
 @bot.message_handler(content_types=['photo', 'video', 'audio', 'document', 'text', 'sticker', 'voice', 'video_note'])
 def catch_all_media(message):
     user_id = message.from_user.id
     register_user(user_id)
     
-    # CRUCIAL: Only catches messages from the specific user who ran /genlink
     if USER_STATES.get(user_id) != "waiting_for_media":
         return
 
@@ -194,17 +225,7 @@ def catch_all_media(message):
         else:
             ALBUM_COLLECTOR[group_id].append(message)
     else:
-        unique_key = generate_unique_key(8)
-        conn = sqlite3.connect('file_store.db')
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO stored_messages (unique_key, chat_id, message_id) VALUES (?, ?, ?)", 
-                       (unique_key, message.chat.id, message.message_id))
-        conn.commit()
-        conn.close()
-        
-        bot_username = bot.get_me().username
-        share_link = f"https://t.me/{bot_username}?start={unique_key}"
-        bot.reply_to(message, f"✅ **Stored successfully!**\n\n🔗 Your Shareable Link:\n`{share_link}`", parse_mode="Markdown")
+        save_single_message_to_db(message)
         USER_STATES.pop(user_id, None)
 
 if __name__ == '__main__':
