@@ -56,6 +56,40 @@ def set_bot_menu_commands():
     ]
     bot.set_my_commands(commands)
 
+# --- FAST ASYNC BROADCAST ENGINE ---
+def async_broadcast(users, text):
+    for user in users:
+        try:
+            bot.send_message(user[0], text)
+        except Exception:
+            pass
+
+@bot.message_handler(commands=['broadcast'])
+def broadcast_cmd(message):
+    # If ANYONE else runs this command, reject them instantly
+    if not is_admin(message.from_user.id):
+        bot.reply_to(message, "Only @HarshInfo Can use this command")
+        return
+    
+    command_text = message.text.split(maxsplit=1)
+    
+    # If Admin types it completely empty
+    if len(command_text) < 2:
+        bot.reply_to(message, "Type a message to send Everywhere bot exists")
+        return
+    
+    # If Admin sends a real broadcast message
+    broadcast_msg = command_text[1]
+    
+    conn = sqlite3.connect('file_store.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id FROM bot_users")
+    users = cursor.fetchall()
+    conn.close()
+    
+    threading.Thread(target=async_broadcast, args=(users, broadcast_msg)).start()
+    bot.reply_to(message, "Message Sent To Everywhere bot exists ✅")
+
 # --- START COMMAND ---
 @bot.message_handler(commands=['start'])
 def start_cmd(message):
@@ -65,7 +99,7 @@ def start_cmd(message):
     if len(text_args) > 1:
         unique_key = text_args[1]
         conn = sqlite3.connect('file_store.db')
-        cursor = cursor = conn.cursor()
+        cursor = conn.cursor()
         cursor.execute("SELECT chat_id, message_id FROM stored_messages WHERE unique_key = ?", (unique_key,))
         results = cursor.fetchall()
         conn.close()
@@ -150,40 +184,6 @@ def catch_all_media(message):
         share_link = f"https://t.me/{bot_username}?start={unique_key}"
         bot.reply_to(message, f"✅ **Stored successfully!**\n\n🔗 Your Shareable Link:\n`{share_link}`", parse_mode="Markdown")
         USER_STATES.pop(user_id, None)
-
-# --- FAST ASYNC BROADCAST ENGINE ---
-def async_broadcast(users, text):
-    for user in users:
-        try:
-            bot.send_message(user[0], text)
-        except Exception:
-            pass
-
-@bot.message_handler(commands=['broadcast'])
-def broadcast_cmd(message):
-    # If ANYONE else runs this command, hit them with your custom tag notice instantly
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "Only @HarshInfo Can use this command")
-        return
-    
-    command_text = message.text.split(maxsplit=1)
-    
-    # If Admin types it completely empty
-    if len(command_text) < 2:
-        bot.reply_to(message, "Type a message to send Everywhere bot exists")
-        return
-    
-    # If Admin sends a real broadcast message
-    broadcast_msg = command_text[1]
-    
-    conn = sqlite3.connect('file_store.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id FROM bot_users")
-    users = cursor.fetchall()
-    conn.close()
-    
-    threading.Thread(target=async_broadcast, args=(users, broadcast_msg)).start()
-    bot.reply_to(message, "Message Sent To Everywhere bot exists ✅")
 
 if __name__ == '__main__':
     init_db()
