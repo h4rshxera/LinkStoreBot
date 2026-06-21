@@ -64,7 +64,6 @@ def async_broadcast_engine(users, original_message, text_payload=None):
             if text_payload:
                 bot.send_message(target_user_id, text_payload)
             else:
-                # This explicitly clones photos, videos, text, or files perfectly
                 bot.copy_message(chat_id=target_user_id, from_chat_id=original_message.chat.id, message_id=original_message.message_id)
         except Exception:
             pass
@@ -80,7 +79,7 @@ def trigger_broadcast_sending(message, text_payload=None, target_msg=None):
     threading.Thread(target=async_broadcast_engine, args=(users, msg_to_copy, text_payload)).start()
     bot.reply_to(message, "Message Sent To Everywhere bot exists ✅")
 
-# --- BROADCAST CONTROLLER ---
+# --- BROADCAST CONTROLLER (WORKS IN GC & DM) ---
 @bot.message_handler(commands=['broadcast'])
 def broadcast_cmd(message):
     register_user(message.from_user.id)
@@ -88,14 +87,15 @@ def broadcast_cmd(message):
         bot.reply_to(message, "Only @HarshInfo Can use this command")
         return
     
-    # Pathway 1: /broadcast by replying to an existing media/text message
+    # Pathway 1: /broadcast by replying to an existing media/text message in GC or DM
     if message.reply_to_message:
         trigger_broadcast_sending(message, target_msg=message.reply_to_message)
         return
 
+    # Strips out command mentions like /broadcast@harshxerabot in groups
     command_text = message.text.split(maxsplit=1)
     
-    # Pathway 2: /broadcast completely blank (prompts for next message)
+    # Pathway 2: /broadcast completely blank
     if len(command_text) < 2:
         bot.reply_to(message, "Type a message to send Everywhere bot exists")
         bot.register_next_step_handler(message, process_manual_next_step_broadcast)
@@ -111,7 +111,7 @@ def process_manual_next_step_broadcast(message):
         return
     trigger_broadcast_sending(message)
 
-# --- START COMMAND ---
+# --- START COMMAND (WORKS IN GC & DM) ---
 @bot.message_handler(commands=['start'])
 def start_cmd(message):
     register_user(message.from_user.id)
@@ -175,12 +175,13 @@ def process_delayed_album_save(chat_id, user_id, group_id, reply_to_msg_id):
     )
     USER_STATES.pop(user_id, None)
 
-# --- MASTER CATCH FILTER ---
+# --- MASTER CATCH FILTER (SAFE FOR GROUP CHATS) ---
 @bot.message_handler(content_types=['photo', 'video', 'audio', 'document', 'text', 'sticker', 'voice', 'video_note'])
 def catch_all_media(message):
     user_id = message.from_user.id
     register_user(user_id)
     
+    # CRUCIAL: Only catches messages from the specific user who ran /genlink
     if USER_STATES.get(user_id) != "waiting_for_media":
         return
 
@@ -211,4 +212,4 @@ if __name__ == '__main__':
     set_bot_menu_commands()
     print("🚀 Your Advanced Storage Bot is running smoothly...")
     bot.infinity_polling(timeout=60, long_polling_timeout=30)
-        
+    
