@@ -58,18 +58,18 @@ def set_bot_menu_commands():
 
 # --- GLOBAL ASYNC BROADCAST HANDLER ---
 def async_broadcast_engine(users, original_message, text_payload=None):
-    """ Copy-broadcasts any complex media or sends custom text fields dynamically """
     for user in users:
+        target_user_id = user[0]
         try:
             if text_payload:
-                bot.send_message(user[0], text_payload)
+                bot.send_message(target_user_id, text_payload)
             else:
-                bot.copy_message(chat_id=user[0], from_chat_id=original_message.chat.id, message_id=original_message.message_id)
+                # This explicitly clones photos, videos, text, or files perfectly
+                bot.copy_message(chat_id=target_user_id, from_chat_id=original_message.chat.id, message_id=original_message.message_id)
         except Exception:
             pass
 
 def trigger_broadcast_sending(message, text_payload=None, target_msg=None):
-    """ Pulls all users out of the DB and runs the multi-threaded delivery engine instantly """
     conn = sqlite3.connect('file_store.db')
     cursor = conn.cursor()
     cursor.execute("SELECT user_id FROM bot_users")
@@ -83,29 +83,30 @@ def trigger_broadcast_sending(message, text_payload=None, target_msg=None):
 # --- BROADCAST CONTROLLER ---
 @bot.message_handler(commands=['broadcast'])
 def broadcast_cmd(message):
+    register_user(message.from_user.id)
     if not is_admin(message.from_user.id):
         bot.reply_to(message, "Only @HarshInfo Can use this command")
         return
     
-    # Pathway A: /broadcast via Replaying/Replying to another message
+    # Pathway 1: /broadcast by replying to an existing media/text message
     if message.reply_to_message:
         trigger_broadcast_sending(message, target_msg=message.reply_to_message)
         return
 
     command_text = message.text.split(maxsplit=1)
     
-    # Pathway B: /broadcast is completely blank -> Go to Multi-step handler
+    # Pathway 2: /broadcast completely blank (prompts for next message)
     if len(command_text) < 2:
         bot.reply_to(message, "Type a message to send Everywhere bot exists")
         bot.register_next_step_handler(message, process_manual_next_step_broadcast)
         return
     
-    # Pathway C: Inline /broadcast <message> string content
+    # Pathway 3: Inline /broadcast <message>
     inline_text = command_text[1]
     trigger_broadcast_sending(message, text_payload=inline_text)
 
 def process_manual_next_step_broadcast(message):
-    """ Handles step-two delivery for a blank /broadcast prompt """
+    register_user(message.from_user.id)
     if not is_admin(message.from_user.id):
         return
     trigger_broadcast_sending(message)
