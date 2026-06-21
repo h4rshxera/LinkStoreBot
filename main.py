@@ -15,7 +15,7 @@ ADMINS = [8276411342]
 
 # Temporary memory trackers
 ALBUM_COLLECTOR = {}
-USER_STATES = {}  # Tracks if a user is allowed to generate a link right now
+USER_STATES = {}  
 
 def generate_unique_key(length=8):
     chars = string.ascii_letters + string.digits
@@ -33,9 +33,6 @@ def init_db():
         )
     ''')
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS banned_users (user_id INTEGER PRIMARY KEY)
-    ''')
-    cursor.execute('''
         CREATE TABLE IF NOT EXISTS bot_users (user_id INTEGER PRIMARY KEY)
     ''')
     conn.commit()
@@ -51,39 +48,24 @@ def register_user(user_id):
 def is_admin(user_id):
     return user_id in ADMINS
 
-def is_banned(user_id):
-    conn = sqlite3.connect('file_store.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT 1 FROM banned_users WHERE user_id = ?", (user_id,))
-    banned = cursor.fetchone()
-    conn.close()
-    return banned is not None
-
 def set_bot_menu_commands():
     commands = [
         types.BotCommand("start", "🚀 Start the bot or fetch stored items"),
         types.BotCommand("genlink", "🔗 Generate a share link for files/media"),
-        types.BotCommand("broadcast", "📢 Broadcast message to users (Admin Only)"),
-        types.BotCommand("ban", "🔨 Ban a user (Admin Only)"),
-        types.BotCommand("unban", "😇 Unban a user (Admin Only)")
+        types.BotCommand("broadcast", "📢 Broadcast message to users (Admin Only)")
     ]
     bot.set_my_commands(commands)
 
-@bot.message_handler(func=lambda message: is_banned(message.from_user.id))
-def handle_banned(message):
-    bot.reply_to(message, "❌ You are banned from using this bot.")
-
-# --- START COMMAND (RETRIEVAL & CREDIT) ---
+# --- START COMMAND ---
 @bot.message_handler(commands=['start'])
 def start_cmd(message):
     register_user(message.from_user.id)
     text_args = message.text.split()
     
-    # If downloading/fetching content via a link
     if len(text_args) > 1:
         unique_key = text_args[1]
         conn = sqlite3.connect('file_store.db')
-        cursor = conn.cursor()
+        cursor = cursor = conn.cursor()
         cursor.execute("SELECT chat_id, message_id FROM stored_messages WHERE unique_key = ?", (unique_key,))
         results = cursor.fetchall()
         conn.close()
@@ -99,19 +81,18 @@ def start_cmd(message):
             bot.reply_to(message, "❌ Link expired or invalid.")
             return
 
-    # Standard /start message with your signature credit
     bot.reply_to(message, "Bot running made by @HarshInfo")
 
 # --- GENLINK STEP TRIGGER ---
 @bot.message_handler(commands=['genlink'])
 def genlink_cmd(message):
     register_user(message.from_user.id)
-    USER_STATES[message.from_user.id] = "waiting_for_media"  # Turn on listener state for this user
+    USER_STATES[message.from_user.id] = "waiting_for_media"  
     bot.reply_to(message, "🔄 **Send Media text or anything**", parse_mode="Markdown")
 
 # --- ALBUM DELAY HANDLING ---
 def process_delayed_album_save(chat_id, user_id, group_id, reply_to_msg_id):
-    time.sleep(1.5)  # Wait for full dynamic delivery album buffer
+    time.sleep(1.0)  
     
     messages_to_save = ALBUM_COLLECTOR.pop(group_id, [])
     if not messages_to_save:
@@ -137,32 +118,25 @@ def process_delayed_album_save(chat_id, user_id, group_id, reply_to_msg_id):
         parse_mode="Markdown",
         reply_to_message_id=reply_to_msg_id
     )
-    
-    # Turn off listener state now that link is handed out
     USER_STATES.pop(user_id, None)
 
-# --- MASTER CATCH FILTER (ONLY RESPONDS IF STATE IS ACTIVE) ---
+# --- MASTER CATCH FILTER ---
 @bot.message_handler(content_types=['photo', 'video', 'audio', 'document', 'text', 'sticker', 'voice', 'video_note'])
 def catch_all_media(message):
     user_id = message.from_user.id
     register_user(user_id)
     
-    # Strictly ignore any regular chatter unless they hit /genlink first!
     if USER_STATES.get(user_id) != "waiting_for_media":
         return
 
-    # If it is part of a combined album media pack
     if message.media_group_id:
         group_id = message.media_group_id
-        
         if group_id not in ALBUM_COLLECTOR:
             ALBUM_COLLECTOR[group_id] = [message]
             t = threading.Thread(target=process_delayed_album_save, args=(message.chat.id, user_id, group_id, message.message_id))
             t.start()
         else:
             ALBUM_COLLECTOR[group_id].append(message)
-            
-    # If it's a single item (text, file, photo, etc.)
     else:
         unique_key = generate_unique_key(8)
         conn = sqlite3.connect('file_store.db')
@@ -175,74 +149,45 @@ def catch_all_media(message):
         bot_username = bot.get_me().username
         share_link = f"https://t.me/{bot_username}?start={unique_key}"
         bot.reply_to(message, f"✅ **Stored successfully!**\n\n🔗 Your Shareable Link:\n`{share_link}`", parse_mode="Markdown")
-        
-        # Turn off listener state immediately
         USER_STATES.pop(user_id, None)
 
-# --- ADMIN POWER COMMANDS ---
+# --- FAST ASYNC BROADCAST ENGINE ---
+def async_broadcast(users, text):
+    for user in users:
+        try:
+            bot.send_message(user[0], text)
+        except Exception:
+            pass
+
 @bot.message_handler(commands=['broadcast'])
 def broadcast_cmd(message):
+    # If ANYONE else runs this command, hit them with your custom tag notice instantly
     if not is_admin(message.from_user.id):
-        bot.reply_to(message, "🚫 This command is restricted to Admins.")
+        bot.reply_to(message, "Only @HarshInfo Can use this command")
         return
     
     command_text = message.text.split(maxsplit=1)
+    
+    # If Admin types it completely empty
     if len(command_text) < 2:
-        bot.reply_to(message, "⚠️ Usage: `/broadcast Your message text here`")
+        bot.reply_to(message, "Type a message to send Everywhere bot exists")
         return
     
+    # If Admin sends a real broadcast message
     broadcast_msg = command_text[1]
+    
     conn = sqlite3.connect('file_store.db')
     cursor = conn.cursor()
     cursor.execute("SELECT user_id FROM bot_users")
     users = cursor.fetchall()
     conn.close()
     
-    success_count = 0
-    for user in users:
-        try:
-            bot.send_message(user[0], broadcast_msg)
-            success_count += 1
-        except Exception:
-            pass
-            
-    bot.reply_to(message, f"📢 Broadcast complete. Sent successfully to {success_count} active users.")
-
-@bot.message_handler(commands=['ban'])
-def ban_cmd(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "🚫 Restricted to Admins.")
-        return
-    try:
-        user_id_to_ban = int(message.text.split()[1])
-        conn = sqlite3.connect('file_store.db')
-        cursor = conn.cursor()
-        cursor.execute("INSERT OR IGNORE INTO banned_users (user_id) VALUES (?)", (user_id_to_ban,))
-        conn.commit()
-        conn.close()
-        bot.reply_to(message, f"🔨 User `{user_id_to_ban}` has been banned.", parse_mode="Markdown")
-    except (IndexError, ValueError):
-        bot.reply_to(message, "⚠️ Usage: `/ban USER_ID`")
-
-@bot.message_handler(commands=['unban'])
-def unban_cmd(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "🚫 Restricted to Admins.")
-        return
-    try:
-        user_id_to_unban = int(message.text.split()[1])
-        conn = sqlite3.connect('file_store.db')
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM banned_users WHERE user_id = ?", (user_id_to_unban,))
-        conn.commit()
-        conn.close()
-        bot.reply_to(message, f"😇 User `{user_id_to_unban}` unbanned.", parse_mode="Markdown")
-    except (IndexError, ValueError):
-        bot.reply_to(message, "⚠️ Usage: `/unban USER_ID`")
+    threading.Thread(target=async_broadcast, args=(users, broadcast_msg)).start()
+    bot.reply_to(message, "Message Sent To Everywhere bot exists ✅")
 
 if __name__ == '__main__':
     init_db()
     set_bot_menu_commands()
     print("🚀 Your Advanced Storage Bot is running smoothly...")
     bot.infinity_polling(timeout=60, long_polling_timeout=30)
-          
+    
