@@ -56,39 +56,59 @@ def set_bot_menu_commands():
     ]
     bot.set_my_commands(commands)
 
-# --- FAST ASYNC BROADCAST ENGINE ---
-def async_broadcast(users, text):
+# --- GLOBAL ASYNC BROADCAST HANDLER ---
+def async_broadcast_engine(users, original_message, text_payload=None):
+    """ Copy-broadcasts any complex media or sends custom text fields dynamically """
     for user in users:
         try:
-            bot.send_message(user[0], text)
+            if text_payload:
+                bot.send_message(user[0], text_payload)
+            else:
+                bot.copy_message(chat_id=user[0], from_chat_id=original_message.chat.id, message_id=original_message.message_id)
         except Exception:
             pass
 
-@bot.message_handler(commands=['broadcast'])
-def broadcast_cmd(message):
-    # If ANYONE else runs this command, reject them instantly
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "Only @HarshInfo Can use this command")
-        return
-    
-    command_text = message.text.split(maxsplit=1)
-    
-    # If Admin types it completely empty
-    if len(command_text) < 2:
-        bot.reply_to(message, "Type a message to send Everywhere bot exists")
-        return
-    
-    # If Admin sends a real broadcast message
-    broadcast_msg = command_text[1]
-    
+def trigger_broadcast_sending(message, text_payload=None, target_msg=None):
+    """ Pulls all users out of the DB and runs the multi-threaded delivery engine instantly """
     conn = sqlite3.connect('file_store.db')
     cursor = conn.cursor()
     cursor.execute("SELECT user_id FROM bot_users")
     users = cursor.fetchall()
     conn.close()
     
-    threading.Thread(target=async_broadcast, args=(users, broadcast_msg)).start()
+    msg_to_copy = target_msg if target_msg else message
+    threading.Thread(target=async_broadcast_engine, args=(users, msg_to_copy, text_payload)).start()
     bot.reply_to(message, "Message Sent To Everywhere bot exists ✅")
+
+# --- BROADCAST CONTROLLER ---
+@bot.message_handler(commands=['broadcast'])
+def broadcast_cmd(message):
+    if not is_admin(message.from_user.id):
+        bot.reply_to(message, "Only @HarshInfo Can use this command")
+        return
+    
+    # Pathway A: /broadcast via Replaying/Replying to another message
+    if message.reply_to_message:
+        trigger_broadcast_sending(message, target_msg=message.reply_to_message)
+        return
+
+    command_text = message.text.split(maxsplit=1)
+    
+    # Pathway B: /broadcast is completely blank -> Go to Multi-step handler
+    if len(command_text) < 2:
+        bot.reply_to(message, "Type a message to send Everywhere bot exists")
+        bot.register_next_step_handler(message, process_manual_next_step_broadcast)
+        return
+    
+    # Pathway C: Inline /broadcast <message> string content
+    inline_text = command_text[1]
+    trigger_broadcast_sending(message, text_payload=inline_text)
+
+def process_manual_next_step_broadcast(message):
+    """ Handles step-two delivery for a blank /broadcast prompt """
+    if not is_admin(message.from_user.id):
+        return
+    trigger_broadcast_sending(message)
 
 # --- START COMMAND ---
 @bot.message_handler(commands=['start'])
@@ -190,4 +210,4 @@ if __name__ == '__main__':
     set_bot_menu_commands()
     print("🚀 Your Advanced Storage Bot is running smoothly...")
     bot.infinity_polling(timeout=60, long_polling_timeout=30)
-    
+        
